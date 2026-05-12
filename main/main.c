@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -8,32 +9,83 @@
 #include "ssd1306.h"
 #include "max30102.h"
 #include "mpu6050.h"
+#include "thingspeak.h"
 
-// shared data
 volatile float g_bpm = -1;
+
 volatile int g_finger = 0;
-volatile const char *g_state = "SIT";
+
+volatile int g_countdown = 0;
+
+volatile int g_ready = 0;
+
+typedef enum
+{
+    STATE_SITTING = 0,
+    STATE_WALKING,
+    STATE_RUNNING
+
+} motion_state_t;
+
+volatile motion_state_t g_motion = STATE_SITTING;
 
 
 // -------- PULSE --------
 void pulse_task(void *arg)
 {
+    int prev_finger = 0;
+
+    TickType_t finger_start = 0;
+
     while (1)
     {
         float bpm = max30102_get_bpm();
+
         int finger = max30102_finger_present();
 
         g_finger = finger;
 
-        if (finger && bpm > 0)
+        if (finger && !prev_finger)
         {
-            g_bpm = bpm;
+            finger_start = xTaskGetTickCount();
+
+            g_ready = 0;
         }
 
-        if (!finger)
+        if (finger)
+        {
+            int elapsed =
+                ((xTaskGetTickCount() - finger_start) *
+                 portTICK_PERIOD_MS) / 1000;
+
+            if (elapsed < 10)
+            {
+                g_countdown = 10 - elapsed;
+
+                g_bpm = -1;
+            }
+            else
+            {
+                g_ready = 1;
+
+                g_countdown = 0;
+
+                if (bpm > 0)
+                {
+                    g_bpm = bpm;
+                }
+            }
+        }
+        else
         {
             g_bpm = -1;
+
+            g_ready = 0;
+
+            g_countdown = 0;
         }
+
+        prev_finger = finger;
 
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -44,6 +96,7 @@ void pulse_task(void *arg)
 void motion_task(void *arg)
 {
     int16_t x, y, z;
+
     float motion_avg = 0;
 
     while (1)
@@ -54,14 +107,30 @@ void motion_task(void *arg)
             float fy = (float)y;
             float fz = (float)z;
 
-            float mag = sqrtf(fx*fx + fy*fy + fz*fz);
-            float motion = fabsf(mag - 16384);
+            float mag =
+                sqrtf(fx * fx +
+                      fy * fy +
+                      fz * fz);
 
-            motion_avg = 0.95f * motion_avg + 0.05f * motion;
+            float motion =
+                fabsf(mag - 16384.0f);
 
-            if (motion_avg > 2500) g_state = "RUN";
-            else if (motion_avg > 1000) g_state = "WALK";
-            else g_state = "SIT";
+            motion_avg =
+                0.92f * motion_avg +
+                0.08f * motion;
+
+            if (motion_avg > 5000)
+            {
+                g_motion = STATE_RUNNING;
+            }
+            else if (motion_avg > 1800)
+            {
+                g_motion = STATE_WALKING;
+            }
+            else
+            {
+                g_motion = STATE_SITTING;
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(50));
@@ -74,30 +143,85 @@ void display_task(void *arg)
 {
     while (1)
     {
+        
         ssd1306_clear();
 
-        // TOP
         if (!g_finger)
         {
-            ssd1306_draw_text_big(0,5, "TAP SENSOR");
+            ssd1306_draw_text_big(0, 5, "TAP SENSOR");
+        }
+        else if (!g_ready)
+        {
+            char buf[8];
+
+            sprintf(buf, "%d", g_countdown);
+
+            ssd1306_draw_text_big(50, 0, buf);
         }
         else if (g_bpm > 0)
         {
             char buf[16];
-            sprintf(buf, "PULS: %d", (int)g_bpm);
-            ssd1306_draw_text_big(2, 0, buf);
+
+            sprintf(buf, "%d BPM", (int)g_bpm);
+
+            ssd1306_draw_text_big(0, 0, buf);
         }
         else
         {
-            ssd1306_draw_text_big(0, 0, "...");
+            ssd1306_draw_text_big(40, 0, "...");
         }
 
-        // BOTTOM
-        ssd1306_draw_text_big(0, 32, g_state);
+        switch (g_motion)
+        {
+            case STATE_RUNNING:
+                ssd1306_draw_text_big(0, 40, "RUNNING");
+                break;
+
+            case STATE_WALKING:
+                ssd1306_draw_text_big(0, 40, "WALKING");
+                break;
+
+            default:
+                ssd1306_draw_text_big(0, 40, "SITTING");
+                break;
+        }
 
         ssd1306_update();
 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
+
+
+// -------- THINGSPEAK --------
+void thingspeak_task(void *arg)
+{
+    while (1)
+    {
+        int motion = 0;
+
+        switch (g_motion)
+        {
+            case STATE_WALKING:
+                motion = 1;
+                break;
+
+            case STATE_RUNNING:
+                motion = 2;
+                break;
+
+            default:
+                motion = 0;
+                break;
+        }
+
+        thingspeak_send(
+            (int)g_bpm,
+            motion,
+            g_finger
+        );
+
+        vTaskDelay(pdMS_TO_TICKS(15000));
     }
 }
 
@@ -106,12 +230,12 @@ void display_task(void *arg)
 void app_main()
 {
     i2c_master_init();
-
     ssd1306_init();
     max30102_init();
     mpu6050_init();
-
-    xTaskCreate(pulse_task, "pulse", 4096, NULL, 5, NULL);
-    xTaskCreate(motion_task, "motion", 4096, NULL, 5, NULL);
-    xTaskCreate(display_task, "display", 4096, NULL, 5, NULL);
+    thingspeak_init();
+    xTaskCreate(pulse_task,"pulse",4096,NULL,5,NULL);
+    xTaskCreate(motion_task,"motion",4096,NULL,5,NULL);
+    xTaskCreate(display_task,"display",4096,NULL,5,NULL);
+    xTaskCreate(thingspeak_task,"thingspeak",4096,NULL,5,NULL);
 }
