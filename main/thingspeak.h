@@ -3,10 +3,6 @@
 
 void thingspeak_init(void);
 
-void thingspeak_send(
-    int bpm,
-    int motion,
-    int finger
-);
+void thingspeak_send(int bpm, int motion, int finger);
 
 #endif

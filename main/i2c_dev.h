@@ -2,8 +2,6 @@
 #define I2C_DEV_H
 
 
-//oled
-
 #include "driver/i2c.h"
 #include "esp_err.h"
 
