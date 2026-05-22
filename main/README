@@ -1,0 +1,86 @@
+# Smart Health Monitor
+## Overview
+This project is an ESP32-based health monitoring system that measures:
+- Heart rate (BPM)
+- Motion/activity level
+- Finger detection status
+The collected data is displayed on an OLED screen and uploaded to ThingSpeak for remote monitoring.
+
+## Hardware:
+### ESP32
+Main controller responsible for sensor reading, processing, display updates, and cloud communication.
+
+### MAX30102
+Optical heart rate sensor used to measure pulse and detect finger presence.
+
+### MPU6050
+3-axis accelerometer used to detect body movement and classify activity:
+- Sitting
+- Walking
+- Running
+
+### SSD1306 OLED Display
+Displays:
+- Heart rate (BPM)
+- Measurement countdown
+- Activity status
+
+## Connections
+### I2C Bus
+All devices share the same I2C bus.
+Device       --  Address 
+MAX30102     --    0x57 
+MPU6050      --    0x68 
+SSD1306 OLED --    0x3C 
+
+### ESP32 Wiring
+ESP32 ------ Device 
+------------------
+GPIO 8  SDA  ---  GPIO 9  SCL 
+3.3V  VCC    ---  GND  GND 
+
+## Software Architecture
+The application runs multiple FreeRTOS tasks:
+
+### Pulse Task
+- Reads MAX30102 data
+- Detects finger presence
+- Calculates heart rate (BPM)
+
+### Motion Task
+- Reads MPU6050 acceleration data
+- Classifies activity level
+
+### Display Task
+- Updates OLED display
+- Shows BPM and activity status
+
+### ThingSpeak Task
+- Sends sensor data to ThingSpeak every 15 seconds
+
+## Data Upload
+
+The following values are uploaded to ThingSpeak:
+
+Field ----------  Data 
+Field 1 --> Heart Rate (BPM) 
+Field 2 --> Motion State
+Field 3 --> Finger Detection
+
+Motion state values:
+- 0 = Sitting
+- 1 = Walking
+- 2 = Running
+
+## Development Environment
+- ESP-IDF
+- FreeRTOS
+- C Programming Language
+
+## Features
+- Real-time heart rate monitoring
+- Motion detection
+- OLED display interface
+- Wi-Fi connectivity
+- Multi-tasking with FreeRTOS
+- ThingSpeak cloud integration
